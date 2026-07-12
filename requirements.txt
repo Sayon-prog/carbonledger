@@ -2,3 +2,4 @@ streamlit
 reportlab
 pandas
 openpyxl
+supabase==1.2.0
