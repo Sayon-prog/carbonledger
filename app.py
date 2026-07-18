@@ -487,6 +487,72 @@ with tab_live:
                 else:
                     st.info("No valid coordinates yet.")
 
+                try:
+                    st.markdown("### 🌍 CO2e Emissions by Vehicle")
+                    st.caption(
+                        "Distance computed from consecutive GPS pings (haversine) · "
+                        "Vehicle class defaulted to Heavy Truck 16-24T (GVW-matched to the "
+                        "WB15C5750 baseline audit) until real registration/GVW data is mapped per device."
+                    )
+
+                    from math import radians, sin, cos, sqrt, atan2
+
+                    def _haversine_km(lat1, lon1, lat2, lon2):
+                        R = 6371.0
+                        phi1, phi2 = radians(lat1), radians(lat2)
+                        dphi = radians(lat2 - lat1)
+                        dlambda = radians(lon2 - lon1)
+                        a = sin(dphi/2)**2 + cos(phi1)*cos(phi2)*sin(dlambda/2)**2
+                        return 2 * R * atan2(sqrt(a), sqrt(1 - a))
+
+                    valid_rows = [r for r in rows if r.get("latitude") and r.get("longitude")
+                                  and r["latitude"] != 0 and r["longitude"] != 0]
+
+                    by_vehicle_pings = {}
+                    for r in valid_rows:
+                        veh = r.get("vehicle_number", "unknown")
+                        by_vehicle_pings.setdefault(veh, []).append(r)
+
+                    vehicle_rows = []
+                    for veh, pings in by_vehicle_pings.items():
+                        pings_sorted = sorted(pings, key=lambda r: r.get("timestamp", ""))
+                        dist_km = 0.0
+                        for i in range(1, len(pings_sorted)):
+                            p1, p2 = pings_sorted[i - 1], pings_sorted[i]
+                            dist_km += _haversine_km(p1["latitude"], p1["longitude"],
+                                                      p2["latitude"], p2["longitude"])
+
+                        trip = {
+                            "trip_id": veh, "carrier": "Live Fleet",
+                            "distance_km": round(dist_km, 3),
+                            "vehicle_type": "hgv_16t", "fuel_type": "diesel",
+                        }
+                        single = calculate_portfolio([trip])
+                        if "summary" in single:
+                            s = single["summary"]
+                            vehicle_rows.append({
+                                "Vehicle (IMEI)": veh,
+                                "Pings": len(pings_sorted),
+                                "Distance (km)": trip["distance_km"],
+                                "CO2e (kg)": round(s["total_co2e_kg"], 4),
+                                "CO2e (tonnes)": s["total_co2e_tonnes"],
+                                "Last Seen": str(pings_sorted[-1].get("timestamp",""))[:16],
+                            })
+
+                    if vehicle_rows:
+                        vdf = pd.DataFrame(sorted(vehicle_rows, key=lambda r: r["CO2e (kg)"], reverse=True))
+                        st.dataframe(vdf, use_container_width=True, hide_index=True)
+                        st.bar_chart(vdf.set_index("Vehicle (IMEI)")["CO2e (kg)"])
+                        st.caption(
+                            "⚠️ Based on the last 200 pings pulled above, not full trip history. "
+                            "Vehicle class defaulted — update once real registration/GVW mapping "
+                            "exists per device."
+                        )
+                    else:
+                        st.info("No valid coordinate pairs yet to compute per-vehicle emissions.")
+                except Exception as emissions_err:
+                    st.warning(f"Emissions-by-vehicle section skipped due to an error: {emissions_err}")
+
                 st.markdown("### 📋 Recent Pings")
                 st.dataframe(pd.DataFrame([{
                     "Vehicle":    r.get("vehicle_number", ""),
